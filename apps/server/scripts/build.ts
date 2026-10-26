@@ -11,7 +11,7 @@ const photonDirectory = dirname(Bun.resolveSync("@silvia-odwyer/photon-node", ag
 // await $`${process.execPath} run build:teams`.cwd(projectDir);
 await $`${process.execPath} run build`.cwd(resolve(projectDir, "packages/mcp"));
 // ACT: Photon 与 anydoc 保留完整包及相邻的 WASM/原生文件，运行时不依赖源码目录或启动位置。
-await $`${process.execPath} build src/index.ts --target=bun --minify --external @silvia-odwyer/photon-node --external @firecrawl/anydoc --external @firecrawl/anydoc-wasm --define ${`process.env.appVersion:${JSON.stringify(config.app.version)}`} --outdir ../../build/server`.cwd(resolve(projectDir, "apps/server"));
+await $`${process.execPath} build src/index.ts --target=bun --minify --external @silvia-odwyer/photon-node --external @firecrawl/anydoc --external @firecrawl/anydoc-wasm --define ${`process.env.appVersion:${JSON.stringify(config.app.version)}`} --outdir ${resolve(projectDir, "build/server")}`.cwd(resolve(projectDir, "apps/server"));
 const photonOutput = resolve(projectDir, "build/server/node_modules/@silvia-odwyer/photon-node");
 await rm(photonOutput, { recursive: true, force: true });
 await cp(photonDirectory, photonOutput, { recursive: true });

@@ -10,11 +10,11 @@ for (const group of ["nodes", "tools", "ext"]) {
   await rm(resolve(projectDir, "build", group), { recursive: true, force: true });
   for (const entry of await readdir(groupDirectory, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    await $`${process.execPath} run build`
+    await $`${process.execPath} run --bun build`
       .cwd(resolve(groupDirectory, entry.name))
       .env({ ...process.env, NODE_ENV: "production" });
   }
 }
 
-await $`${process.execPath} run build`.cwd(resolve(projectDir, "apps/web"));
-await $`${process.execPath} run build`.cwd(resolve(projectDir, "apps/server"));
+await $`${process.execPath} run --bun build`.cwd(resolve(projectDir, "apps/web"));
+await $`${process.execPath} run --bun build`.cwd(resolve(projectDir, "apps/server"));
