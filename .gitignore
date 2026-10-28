@@ -32,3 +32,4 @@ Thumbs.db
 *.keychain-db
 .tmp/
 .idea
+localComfyui.ts
