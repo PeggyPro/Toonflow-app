@@ -276,6 +276,151 @@ export async function listMediaProviders() {
     }));
 }
 
+export function createOpenAiImageProviderSource(id: string, label: string, apiUrl: string, protocol: string, models: Array<{ id: string; label: string }>) {
+  if (!/^[a-z][a-zA-Z0-9]{0,95}$/.test(id)) throw new Error("供应商 ID 只能使用字母和数字，且须以小写字母开头");
+  if (!label.trim() || label.length > 200) throw new Error("供应商显示名称无效");
+  if (!Array.isArray(models) || models.length === 0 || models.length > 2000) throw new Error("至少需要配置一个图片模型");
+  if (!models.every(model => model && typeof model.id === "string" && typeof model.label === "string" && model.id.trim() && model.label.trim() && model.id.length <= 200 && model.label.length <= 200)) throw new Error("图片模型配置无效");
+  if (new Set(models.map(model => model.id.trim())).size !== models.length) throw new Error("模型 ID 不能重复");
+  if (protocol !== "openai-images" && protocol !== "openai-completions") throw new Error("图片协议无效");
+  const parsedUrl = new URL(apiUrl);
+  if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) throw new Error("请填写不含凭据和查询参数的 HTTP API 地址");
+  const imageModels = models.map(model => ({ id: model.id.trim(), label: model.label.trim(), type: "image" }));
+  let pathname = parsedUrl.pathname.replace(/\/+$/, "");
+  if (!pathname) pathname = "/v1";
+  if (/\/images\/(?:generations|edits)$/i.test(pathname)) pathname = pathname.replace(/\/images\/(?:generations|edits)$/i, "");
+  const modelsUrl = parsedUrl.origin + pathname + "/models";
+  return `type MediaInput =
+  | { type: "url"; url: string; mimeType?: string }
+  | { type: "base64"; data: string; mimeType: string; name?: string }
+  | { type: "binary"; data: Uint8Array; mimeType: string; name?: string };
+
+type ImageRequest = {
+  model: string;
+  prompt: string;
+  images?: MediaInput[];
+  mask?: MediaInput;
+  ratio?: string;
+  size?: string;
+};
+
+type Context = {
+  config: { apiUrl?: string; protocol?: string; apiKey?: string };
+  signal?: AbortSignal;
+  tool: { fetch: typeof fetch; errorMessage(value: unknown): string };
+};
+
+function getEndpoint(context: Context, path: string) {
+  const raw = String(context.config.apiUrl ?? "").trim();
+  if (!raw) throw new Error("请先在媒体模型设置中配置 API 地址");
+  const url = new URL(raw);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("API 地址必须使用 HTTP 或 HTTPS");
+  if (url.username || url.password || url.search || url.hash) throw new Error("API 地址不能包含凭据、查询参数或片段");
+  let pathname = url.pathname.replace(/\\/+$/, "");
+  if (!pathname) pathname = "/v1";
+  if (/\\/images\\/(?:generations|edits)$/i.test(pathname)) pathname = pathname.replace(/\\/images\\/(?:generations|edits)$/i, "");
+  return url.origin + pathname + path;
+}
+
+async function readInput(context: Context, input: MediaInput) {
+  if (input.type === "url") {
+    const response = await context.tool.fetch(input.url, { signal: context.signal, redirect: "error" });
+    if (!response.ok) throw new Error("读取参考图片失败（HTTP " + response.status + "）");
+    return { data: Buffer.from(await response.arrayBuffer()), mimeType: input.mimeType || response.headers.get("content-type") || "image/png" };
+  }
+  if (input.type === "base64") return { data: Buffer.from(input.data.replace(/^data:[^;]+;base64,/, ""), "base64"), mimeType: input.mimeType || "image/png" };
+  return { data: Buffer.from(input.data), mimeType: input.mimeType || "image/png" };
+}
+
+function appendField(parts: Buffer[], boundary: string, name: string, value: string) {
+  parts.push(Buffer.from("--" + boundary + "\\r\\nContent-Disposition: form-data; name=\\\"" + name + "\\\"\\r\\n\\r\\n" + value + "\\r\\n"));
+}
+
+function appendFile(parts: Buffer[], boundary: string, name: string, fileName: string, mimeType: string, data: Buffer) {
+  parts.push(Buffer.from("--" + boundary + "\\r\\nContent-Disposition: form-data; name=\\\"" + name + "\\\"; filename=\\\"" + fileName + "\\\"\\r\\nContent-Type: " + mimeType + "\\r\\n\\r\\n"));
+  parts.push(data);
+  parts.push(Buffer.from("\\r\\n"));
+}
+
+async function requestJson(context: Context, path: string, body: Record<string, unknown>) {
+  const apiKey = String(context.config.apiKey ?? "").trim();
+  const headers: Record<string, string> = { Accept: "application/json", "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = "Bearer " + apiKey.replace(/^Bearer\\s*/i, "");
+  const response = await context.tool.fetch(getEndpoint(context, path), { method: "POST", headers, body: JSON.stringify(body), signal: context.signal });
+  if (!response.ok) {
+    const message = context.tool.errorMessage(await response.text());
+    throw new Error(message || "图片生成失败（HTTP " + response.status + "）");
+  }
+  return await response.json() as Record<string, unknown>;
+}
+
+function collectImages(payload: Record<string, unknown>) {
+  const items = Array.isArray(payload.data) ? payload.data : [];
+  const result: MediaAsset[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const image = item as Record<string, unknown>;
+    const url = typeof image.url === "string" ? image.url.trim() : "";
+    const base64 = typeof image.b64_json === "string" ? image.b64_json.trim() : "";
+    if (url) result.push({ mediaType: "image", type: "url", url });
+    else if (base64) result.push({ mediaType: "image", type: "base64", data: base64, mimeType: "image/png" });
+  }
+  if (!result.length) throw new Error("图片接口未返回可用的 url 或 b64_json");
+  return result;
+}
+
+async function generateImage(this: Context, request: ImageRequest) {
+  const model = String(request.model ?? "").trim();
+  const prompt = String(request.prompt ?? "").trim();
+  if (!model) throw new Error("未指定图片模型");
+  if (!prompt) throw new Error("请先填写图片提示词");
+  const body: Record<string, unknown> = { model, prompt };
+  if (request.size && /^\\d{2,5}x\\d{2,5}$/i.test(request.size)) body.size = request.size;
+  else if (request.ratio) {
+    const sizes: Record<string, string> = { "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1536x1024", "3:4": "1024x1536", "16:9": "1536x864", "9:16": "864x1536" };
+    if (sizes[request.ratio]) body.size = sizes[request.ratio];
+  }
+  const images = request.images ?? [];
+  if (!images.length && !request.mask) return collectImages(await requestJson(this, "/images/generations", body));
+  if (images.length > 1) throw new Error("图片编辑接口目前只支持 1 张参考图");
+  if (!images.length && request.mask) throw new Error("遮罩需要配合参考图");
+  const boundary = "----toonflow" + Date.now().toString(16);
+  const parts: Buffer[] = [];
+  const main = await readInput(this, images[0]);
+  appendFile(parts, boundary, "image", "reference.png", main.mimeType, main.data);
+  if (request.mask) {
+    const mask = await readInput(this, request.mask);
+    appendFile(parts, boundary, "mask", "mask.png", mask.mimeType, mask.data);
+  }
+  for (const [key, value] of Object.entries(body)) appendField(parts, boundary, key, String(value));
+  parts.push(Buffer.from("--" + boundary + "--\\r\\n"));
+  const apiKey = String(this.config.apiKey ?? "").trim().replace(/^Bearer\\s*/i, "");
+  const headers: Record<string, string> = { Accept: "application/json", "Content-Type": "multipart/form-data; boundary=" + boundary };
+  if (apiKey) headers.Authorization = "Bearer " + apiKey;
+  const response = await this.tool.fetch(getEndpoint(this, "/images/edits"), { method: "POST", headers, body: Buffer.concat(parts), signal: this.signal });
+  if (!response.ok) {
+    const message = this.tool.errorMessage(await response.text());
+    throw new Error(message || "图片编辑失败（HTTP " + response.status + "）");
+  }
+  return collectImages(await response.json() as Record<string, unknown>);
+}
+
+type MediaAsset = { mediaType: "image"; type: "url"; url: string } | { mediaType: "image"; type: "base64"; data: string; mimeType: string };
+
+export default {
+  id: __ID__,
+  label: __LABEL__,
+  modelsUrl: __MODELS_URL__,
+  rules: [
+    { type: "input", field: "apiUrl", title: "API 地址", value: __API_URL__, props: { type: "url", placeholder: "https://api.example.com/v1" } },
+    { type: "select", field: "protocol", title: "API 协议", value: __PROTOCOL__, props: { options: ["openai-images", "openai-completions"] } },
+    { type: "input", field: "apiKey", title: "API Key", value: "", props: { type: "password", showPassword: true, autocomplete: "off" } },
+  ],
+  models: __MODELS__,
+  generateImage,
+};`.replace("__ID__", JSON.stringify(id)).replace("__LABEL__", JSON.stringify(label)).replace("__MODELS_URL__", JSON.stringify(modelsUrl)).replace("__API_URL__", JSON.stringify(apiUrl)).replace("__PROTOCOL__", JSON.stringify(protocol)).replace("__MODELS__", JSON.stringify(imageModels));
+}
+
 export async function addMediaProvider(source: string) {
   const result = validateMediaProviderSource(source);
   const { fileName } = result;

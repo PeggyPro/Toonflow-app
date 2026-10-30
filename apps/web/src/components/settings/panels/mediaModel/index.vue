@@ -19,7 +19,7 @@
         <div class="providerFooter">
           <div class="providerMeta">
             <el-tag v-if="item.version" size="small" type="info" effect="plain">v{{ item.version }}</el-tag>
-            <el-text size="small" type="info">{{ item.models.length }} 个模型</el-text>
+            <el-text size="small" type="info">{{ getVisibleModels(item).length }} 个模型</el-text>
           </div>
           <el-space class="itemActions" wrap>
             <el-button v-if="item.modelsUrl" text :icon="IconDownload" :loading="fetchingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !!item.loadError || !item.revision" @click="fetchModels(item)">获取模型</el-button>
@@ -32,11 +32,11 @@
       </el-card>
     </div>
     <div class="providerActions">
-      <el-button class="addButton" :icon="IconPlus" @click="openAdd('builtin')">添加供应商</el-button>
-      <el-button class="addButton" :icon="IconSettings" @click="openAdd('custom')">添加自定义供应商</el-button>
+      <el-button class="addButton" :icon="IconPlus" @click="openAdd('builtin')">添加{{ providerScopeLabel }}供应商</el-button>
+      <el-button class="addButton" :icon="IconSettings" @click="openAdd('custom')">添加自定义{{ providerScopeLabel }}供应商</el-button>
     </div>
-    <component :is="mediaProviderDialog" v-model="providerDialogVisible" :mode="addMode" @added="saveProviderItem" />
-    <component :is="editProviderDialog" v-model="editorVisible" :provider="editingProvider" @saved="saveProviderItem" />
+    <component :is="mediaProviderDialog" v-model="providerDialogVisible" :mode="addMode" :modelTypes="modelTypes" @added="saveProviderItem" />
+    <component :is="editProviderDialog" v-model="editorVisible" :provider="editingProvider" :modelTypes="modelTypes" @saved="saveProviderItem" />
   </div>
 </template>
 
@@ -46,16 +46,22 @@ import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, shallo
 import { ElMessage } from "element-plus";
 import { IconPlus, IconSettings, IconEdit, IconTrash, IconDownload } from "@tabler/icons-vue";
 import logoUrl from "@toonflow/assets/logo.svg";
-import type { MediaProvider } from "./types";
+import type { MediaProvider, MediaProviderModel } from "./types";
 import { settings, saveSettings } from "@/stores/settings";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
 import tfAccount from "../../tfAccount.vue";
 
-const { visible = true } = defineProps<{ visible?: boolean }>();
+type MediaModelType = Exclude<MediaProviderModel["type"], "text">;
+
+const { visible = true, modelTypes = ["video", "audio"] as MediaModelType[] } = defineProps<{
+  visible?: boolean;
+  modelTypes?: MediaModelType[];
+}>();
 const mediaProviderDialog = shallowRef<Component>();
 const editProviderDialog = shallowRef<Component>();
 const providers = ref<MediaProvider[]>([]);
 const sortedProviders = computed(() => [...providers.value].sort((a, b) => Number(b.id.toLowerCase() === "tfrouter") - Number(a.id.toLowerCase() === "tfrouter")));
+const providerScopeLabel = computed(() => modelTypes.length === 1 && modelTypes[0] === "image" ? "图片生成" : "媒体");
 const loaded = ref(false);
 const providerDialogVisible = ref(false);
 const editorVisible = ref(false);
@@ -64,6 +70,10 @@ const editingProvider = ref<MediaProvider>();
 const deletingFile = ref("");
 const fetchingFile = ref("");
 let loadRequest = 0;
+
+function getVisibleModels(provider: MediaProvider) {
+  return provider.models.filter(model => modelTypes.includes(model.type as MediaModelType));
+}
 
 function getProviderApiKey(id: string) {
   const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown }> | undefined;
@@ -123,7 +133,9 @@ async function fetchModels(provider: MediaProvider) {
   fetchingFile.value = provider.fileName;
   try {
     const { data } = await axios.post<{ code: number; data: MediaProvider; message: string }>("/api/providers/media/models", {
-      fileName: provider.fileName, revision: provider.revision,
+      fileName: provider.fileName,
+      revision: provider.revision,
+      ...(modelTypes.length === 1 ? { modelType: modelTypes[0] } : {}),
     }, { timeout: 35000 });
     if (data.code !== 200 || !data.data) throw new Error(data.message || "获取模型失败");
     saveProviderItem(data.data);

@@ -18,7 +18,7 @@
         <el-form-item label="模型类型">
           <el-select v-model="draft.type" aria-label="模型类型">
             <el-option v-if="model?.type === 'text'" value="text" label="文本（旧配置）" disabled />
-            <el-option v-for="item in modelTypes" :key="item.value" :value="item.value" :label="item.label" />
+            <el-option v-for="item in availableModelTypes" :key="item.value" :value="item.value" :label="item.label" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="draft.type === 'image'" label="图片生成模式" required>
@@ -90,11 +90,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { IconArrowRight, IconPlus, IconTrash } from "@tabler/icons-vue";
 import type { MediaProviderModel } from "./types";
 
-const { model, models } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[] }>();
+type MediaModelType = Exclude<MediaProviderModel["type"], "text">;
+
+const { model, models, allowedTypes = ["image", "video", "audio"] as MediaModelType[] } = defineProps<{
+  model?: MediaProviderModel;
+  models: MediaProviderModel[];
+  allowedTypes?: MediaModelType[];
+}>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ confirmed: [model: MediaProviderModel] }>();
 const modelTypes = [
@@ -102,6 +108,7 @@ const modelTypes = [
   { value: "video", label: "视频" },
   { value: "audio", label: "音频" },
 ];
+const availableModelTypes = computed(() => modelTypes.filter(item => allowedTypes.includes(item.value as MediaModelType)));
 const imageModes = [
   { value: "text", label: "文生图" },
   { value: "singleImage", label: "单图参考" },
@@ -129,7 +136,7 @@ let initialExtraMode: unknown;
 
 function createDraft() {
   return {
-    id: "", label: "", type: "image" as MediaProviderModel["type"],
+    id: "", label: "", type: (allowedTypes[0] ?? "image") as MediaProviderModel["type"],
     imageMode: [] as string[], videoMode: [] as string[], mixedMode: [] as string[],
     mixedModeCount: { videoReference: 1, imageReference: 1, audioReference: 1 } as Record<string, number | undefined>,
     audio: "optional" as "optional" | boolean,

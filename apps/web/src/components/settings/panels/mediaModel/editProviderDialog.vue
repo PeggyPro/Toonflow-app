@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="`编辑媒体供应商：${provider?.label ?? ''}`"
+    :title="`编辑${modelScopeLabel}供应商：${provider?.label ?? ''}`"
     width="min(800px, calc(100vw - 32px))"
     alignCenter
     appendToBody
@@ -33,7 +33,7 @@
             </div>
           </div>
           <div class="modelTags">
-            <el-tag size="small">{{ modelTypes[item.type] }}</el-tag>
+            <el-tag size="small">{{ modelTypeLabels[item.type] }}</el-tag>
             <el-tag v-for="(tag, tagIndex) in modelTags(item)" :key="tagIndex" size="small" type="info">{{ tag }}</el-tag>
           </div>
         </el-card>
@@ -50,6 +50,7 @@
       v-model="modelEditorVisible"
       :model="editingModelIndex === undefined ? undefined : models[editingModelIndex]"
       :models="models"
+      :allowedTypes="modelTypes"
       @confirmed="confirmModel" />
   </el-dialog>
 </template>
@@ -67,7 +68,12 @@ import type { MediaProvider, MediaProviderModel } from "./types";
 import { settings, saveSettings } from "@/stores/settings";
 import { invalidateNodeModels } from "@toonflow/nodes-scaffold/nodeAi";
 
-const { provider } = defineProps<{ provider?: MediaProvider }>();
+type MediaModelType = Exclude<MediaProviderModel["type"], "text">;
+
+const { provider, modelTypes = ["image", "video", "audio"] as MediaModelType[] } = defineProps<{
+  provider?: MediaProvider;
+  modelTypes?: MediaModelType[];
+}>();
 const modelEditorDialog = shallowRef<Component>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ saved: [provider: MediaProvider] }>();
@@ -81,7 +87,8 @@ const formValues = ref<Record<string, unknown>>({});
 const formOptions = computed<Options>(() => ({ form: { labelPosition: "top", disabled: saving.value }, appendValue: false, submitBtn: false, resetBtn: false }));
 const revision = ref("");
 const formError = ref("");
-const modelTypes = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
+const modelTypeLabels = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
+const modelScopeLabel = computed(() => modelTypes.length === 1 && modelTypes[0] === "image" ? "图片生成" : "媒体");
 const modeLabels: Record<string, string> = {
   singleImage: "单图参考", multiReference: "多图参考", startEndRequired: "首尾帧必填",
   endFrameOptional: "尾帧可选", startFrameOptional: "首帧可选",
@@ -97,7 +104,7 @@ watch(visible, isVisible => {
   formRules.value = formCreate.copyRules(provider?.rules ?? []);
   formValues.value = structuredClone(toRaw((provider && configs?.[provider.id]) ?? {}));
   revision.value = provider?.revision ?? "";
-  models.value = JSON.parse(JSON.stringify(provider?.models ?? []));
+  models.value = JSON.parse(JSON.stringify((provider?.models ?? []).filter(model => model.type !== "text" && modelTypes.includes(model.type as MediaModelType))));
 }, { immediate: true });
 
 function modelTags(model: MediaProviderModel) {
@@ -135,7 +142,13 @@ async function saveModels() {
       config.apiKey = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
       if ((config.apiKey as string).length > 8192) throw new Error("API Key 过长");
     }
+    const hiddenModels = (provider.models ?? []).filter(model => !modelTypes.includes(model.type as MediaModelType));
     const ids = new Set<string>();
+    for (const model of hiddenModels) {
+      const id = model.id.trim();
+      if (ids.has(id)) throw new Error(`模型 ID 重复：${id}`);
+      ids.add(id);
+    }
     const values = models.value.map((item, index) => {
       const id = item.id.trim();
       const label = item.label.trim();
@@ -145,7 +158,7 @@ async function saveModels() {
       return { ...item, id, label };
     });
     const { data } = await axios.put<{ code: number; data: MediaProvider; message?: string }>("/api/providers/media/save", {
-      fileName, revision: revision.value, models: values,
+      fileName, revision: revision.value, models: [...hiddenModels, ...values],
     });
     if (data.code !== 200 || !data.data) throw new Error(data.message || "保存模型失败");
     revision.value = data.data.revision;

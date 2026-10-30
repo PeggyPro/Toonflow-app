@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="mode === 'builtin' ? '添加媒体供应商' : '添加自定义媒体供应商'"
+    :title="mode === 'builtin' ? `添加${providerScopeLabel}供应商` : `添加自定义${providerScopeLabel}供应商`"
     :width="mode === 'builtin' ? 'min(860px, 94vw)' : 'min(760px, 94vw)'"
     alignCenter
     appendToBody
@@ -44,7 +44,7 @@
         </section>
       </el-scrollbar>
     </div>
-    <el-scrollbar v-else maxHeight="min(65dvh, calc(100dvh - 160px))">
+    <el-scrollbar v-else-if="!imageCustom" maxHeight="min(65dvh, calc(100dvh - 160px))">
       <div class="dialogContent">
         <el-form class="importForm" labelPosition="top" :disabled="saving" @submit.prevent>
           <el-form-item class="methodField" label="添加方式">
@@ -82,15 +82,45 @@
           <el-text v-if="!modelChoices.length" class="fieldHint" type="info" size="small">请先在文本模型设置中配置模型。</el-text>
           <details class="promptDetails" :open="promptExpanded" @toggle="promptExpanded = ($event.target as HTMLDetailsElement).open">
             <summary>查看完整提示词</summary>
-            <el-input v-if="promptExpanded" :modelValue="providerPrompt" type="textarea" :rows="10" resize="none" readonly aria-label="供应商开发提示词" />
+            <el-input v-if="promptExpanded" :modelValue="scopedProviderPrompt" type="textarea" :rows="10" resize="none" readonly aria-label="供应商开发提示词" />
           </details>
         </section>
         <el-alert v-if="formError" class="formError" :title="formError" type="error" :closable="false" showIcon />
       </div>
     </el-scrollbar>
+    <el-scrollbar v-else maxHeight="min(65dvh, calc(100dvh - 160px))">
+      <el-form ref="imageProviderForm" class="imageProviderForm" :model="imageForm" :rules="imageRules" labelPosition="top" :disabled="saving" @submit.prevent>
+        <div class="formGrid">
+          <el-form-item label="Provider ID" prop="id"><el-input v-model="imageForm.id" placeholder="例如 myProvider" /></el-form-item>
+          <el-form-item label="显示名称" prop="label"><el-input v-model="imageForm.label" placeholder="供应商的显示名称" /></el-form-item>
+          <el-form-item label="API 地址" prop="apiUrl"><el-input v-model="imageForm.apiUrl" dir="ltr" placeholder="https://api.example.com/v1" /></el-form-item>
+          <el-form-item label="API 协议" prop="protocol">
+            <el-select v-model="imageForm.protocol" aria-label="API 协议">
+              <el-option v-for="protocol in imageProtocols" :key="protocol" :label="protocol" :value="protocol" />
+            </el-select>
+          </el-form-item>
+        </div>
+        <el-form-item label="API 密钥" prop="apiKey">
+          <el-input v-model="imageForm.apiKey" type="password" dir="ltr" showPassword autocomplete="off" placeholder="本地无鉴权服务可留空" />
+        </el-form-item>
+        <div class="modelHeader">
+          <el-text tag="strong">模型列表 <el-text type="info">{{ imageModels.length }}</el-text></el-text>
+          <el-button :icon="IconDownload" :loading="fetchingImageModels" @click="fetchImageModels">获取模型列表</el-button>
+        </div>
+        <div class="modelList imageModelList">
+          <div v-for="item in imageModels" :key="item.key" class="modelItem">
+            <el-input v-model="item.id" placeholder="模型 ID" aria-label="模型 ID" />
+            <el-input v-model="item.label" placeholder="显示名称" aria-label="模型显示名称" />
+            <el-button text type="danger" :icon="IconTrash" aria-label="删除模型" @click="imageModels = imageModels.filter(model => model.key !== item.key)" />
+          </div>
+        </div>
+        <el-button class="manualAdd" :icon="IconPlus" @click="addImageModel">手动添加模型</el-button>
+        <el-alert v-if="formError" :title="formError" type="error" :closable="false" showIcon />
+      </el-form>
+    </el-scrollbar>
     <template #footer>
       <el-button :disabled="saving" @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="!source.trim()" @click="addProvider">确定添加供应商</el-button>
+      <el-button type="primary" :loading="saving" :disabled="imageCustom ? !imageModels.length : !source.trim()" @click="addProvider">确定添加供应商</el-button>
     </template>
   </el-dialog>
   <component v-if="providerAgentDialog" :is="providerAgentDialog" v-model="agentVisible" :askUserEnabled="askUserEnabled" @generated="useGeneratedSource" />
@@ -98,9 +128,9 @@
 
 <script setup lang="ts">
 import axios from "axios";
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch, type Component } from "vue";
+import { computed, defineAsyncComponent, onBeforeUnmount, reactive, ref, shallowRef, watch, type Component } from "vue";
 import formCreate, { type Api, type Options } from "../../formCreate";
-import { IconFileCode, IconCode, IconFolderOpen, IconCopy, IconSparkles } from "@tabler/icons-vue";
+import { IconFileCode, IconCode, IconFolderOpen, IconCopy, IconSparkles, IconDownload, IconPlus, IconTrash } from "@tabler/icons-vue";
 import { ElMessage } from "element-plus";
 import { mediaProviders } from "@toonflow/providers";
 import { modelIcon } from "@toonflow/model-icons";
@@ -110,19 +140,38 @@ import tfRouterSource from "@toonflow/providers/media/tfRouter?raw";
 import apiMartSource from "@toonflow/providers/media/apiMart?raw";
 import metasoSource from "@toonflow/providers/media/metaso?raw";
 import compshareSource from "@toonflow/providers/media/compshare?raw";
-import type { MediaProvider } from "./types";
+import type { MediaProvider, MediaProviderModel } from "./types";
 import { providerPrompt } from "./providerPrompt";
 import { modelChoices, saveSettings } from "@/stores/settings";
 import { writeClipboardText } from "@/lib/clipboard";
 import { isMobile } from "@/lib/platform";
 
-const { mode = "custom" } = defineProps<{ mode?: "builtin" | "custom" }>();
+type MediaModelType = Exclude<MediaProviderModel["type"], "text">;
+type ImageModelDraft = { key: string; id: string; label: string };
+
+const { mode = "custom", modelTypes = ["image", "video", "audio"] as MediaModelType[] } = defineProps<{
+  mode?: "builtin" | "custom";
+  modelTypes?: MediaModelType[];
+}>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ added: [provider: MediaProvider] }>();
 const providerSources: Record<string, string> = { tfRouter: tfRouterSource, apiMart: apiMartSource, metaso: metasoSource, compshare: compshareSource };
 const selectedProvider = ref<string>(mediaProviders[0]?.id ?? "");
 const activeProvider = computed(() => mediaProviders.find(provider => provider.id === selectedProvider.value));
-const models = computed<MediaProvider["models"]>(() => activeProvider.value?.models ?? []);
+const models = computed<MediaProvider["models"]>(() => activeProvider.value?.models.filter(model => modelTypes.includes(model.type as MediaModelType)) ?? []);
+const providerScopeLabel = computed(() => modelTypes.length === 1 && modelTypes[0] === "image" ? "图片生成" : "媒体");
+const imageCustom = computed(() => mode === "custom" && modelTypes.length === 1 && modelTypes[0] === "image");
+const imageProtocols = ["openai-images", "openai-completions"];
+const imageForm = reactive({ id: "", label: "", apiUrl: "", protocol: "openai-images", apiKey: "" });
+const imageModels = ref<ImageModelDraft[]>([]);
+const fetchingImageModels = ref(false);
+const imageProviderForm = ref();
+const imageRules = {
+  id: [{ required: true, message: "请输入 Provider ID", trigger: "blur" }],
+  label: [{ required: true, message: "请输入显示名称", trigger: "blur" }],
+  apiUrl: [{ required: true, message: "请输入 API 地址", trigger: "blur" }],
+};
+const scopedProviderPrompt = computed(() => providerPrompt.replaceAll("设置 → 媒体模型 →", `设置 → ${providerScopeLabel.value}模型 →`));
 const providerReadme = computed(() => {
   const provider = activeProvider.value;
   return provider && "readme" in provider && typeof provider.readme === "string" ? provider.readme : "";
@@ -166,7 +215,30 @@ watch(visible, value => {
   formApi.value = undefined;
   addedProvider.value = undefined;
   code.value = fileSource.value = fileName.value = formError.value = "";
+  Object.assign(imageForm, { id: "", label: "", apiUrl: "", protocol: "openai-images", apiKey: "" });
+  imageModels.value = [];
 });
+
+function addImageModel() {
+  imageModels.value.push({ key: crypto.randomUUID(), id: "", label: "" });
+}
+
+async function fetchImageModels() {
+  if (fetchingImageModels.value) return;
+  formError.value = "";
+  if (!imageForm.apiUrl.trim()) { formError.value = "请先填写 API 地址"; return; }
+  fetchingImageModels.value = true;
+  try {
+    const { data } = await axios.post<{ data: { id: string; label: string }[] }>("/api/providers/models", {
+      apiUrl: imageForm.apiUrl.trim(), protocol: imageForm.protocol, apiKey: imageForm.apiKey,
+    }, { timeout: 35000 });
+    const existing = new Set(imageModels.value.map(item => item.id.trim()).filter(Boolean));
+    imageModels.value.push(...data.data.filter(item => !existing.has(item.id)).map(item => ({ key: crypto.randomUUID(), id: item.id, label: item.label || item.id })));
+    if (!data.data.length) formError.value = "接口未返回可用模型，请手动添加模型";
+  } catch (error) {
+    formError.value = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "获取模型列表失败";
+  } finally { fetchingImageModels.value = false; }
+}
 
 async function openAgent() {
   if (openingAgent.value || saving.value || !modelChoices.value.length) return;
@@ -215,11 +287,32 @@ async function readSourceFile(event: Event) {
 }
 
 async function addProvider() {
-  if (saving.value || !source.value.trim()) return;
+  if (saving.value || (imageCustom.value ? !imageModels.value.length : !source.value.trim())) return;
   if (mode === "builtin" && !formApi.value) return;
   saving.value = true;
   formError.value = "";
   try {
+    if (imageCustom.value) {
+      if (!(await imageProviderForm.value?.validate().then(() => true, () => false))) return;
+      const models = imageModels.value.map(item => ({ id: item.id.trim(), label: item.label.trim() }));
+      if (models.some(item => !item.id || !item.label)) throw new Error("请填写每个图片模型的 ID 和显示名称");
+      if (new Set(models.map(item => item.id)).size !== models.length) throw new Error("模型 ID 不能重复");
+      if (!addedProvider.value) {
+        const { data } = await axios.post<{ data: MediaProvider }>("/api/providers/media/custom", {
+          id: imageForm.id.trim(), label: imageForm.label.trim(), apiUrl: imageForm.apiUrl.trim(), protocol: imageForm.protocol, models,
+        });
+        addedProvider.value = data.data;
+        emit("added", data.data);
+        invalidateNodeModels("media");
+      }
+      await saveSettings(settings => {
+        const configs = settings.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
+        if (configs !== undefined && (!configs || typeof configs !== "object" || Array.isArray(configs))) throw new Error("媒体供应商配置格式无效");
+        return { mediaProviderConfigs: { ...configs, [addedProvider.value!.id]: { apiUrl: imageForm.apiUrl.trim(), protocol: imageForm.protocol, apiKey: imageForm.apiKey.trim() } } };
+      });
+      visible.value = false;
+      return;
+    }
     let values: Record<string, unknown> | undefined;
     if (mode === "builtin") {
       if (!(await formApi.value!.validate().then(() => true, () => false))) return;
@@ -259,7 +352,7 @@ async function addProvider() {
 
 async function copyPrompt() {
   try {
-    await writeClipboardText(providerPrompt);
+    await writeClipboardText(scopedProviderPrompt.value);
     ElMessage.success("提示词已复制，发给其他 AI 后跟着回答问题即可");
   } catch {
     ElMessage.error("复制失败，请展开「查看完整提示词」后手动复制");
@@ -356,6 +449,45 @@ async function copyPrompt() {
       border-right: 0;
       border-bottom: 1px solid var(--el-border-color-lighter);
     }
+  }
+}
+
+.imageProviderForm {
+  padding: 8px 4px;
+
+  .formGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 16px;
+  }
+
+  .modelHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 12px 0;
+  }
+
+  .imageModelList {
+    display: grid;
+    gap: 8px;
+  }
+
+  .modelItem {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .manualAdd {
+    margin-top: 12px;
+  }
+
+  @media (max-width: 560px) {
+    .formGrid { grid-template-columns: 1fr; }
+    .modelItem { grid-template-columns: 1fr; }
   }
 }
 

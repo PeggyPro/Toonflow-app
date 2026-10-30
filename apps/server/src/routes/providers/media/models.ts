@@ -7,6 +7,7 @@ import { success } from "@/lib/responseFormat";
 export default Router().post("/", validateFields({
   fileName: u.mediaProvider.mediaProviderFileSchema,
   revision: z.string().regex(/^[a-f0-9]{64}$/),
+  modelType: z.enum(["image", "video", "audio"]).optional(),
 }), async (req, res) => {
-  res.json(success(await u.mediaProvider.refreshMediaProviderModels(req.body.fileName, req.body.revision)));
+  res.json(success(await u.mediaProvider.refreshMediaProviderModels(req.body.fileName, req.body.revision, req.body.modelType)));
 });

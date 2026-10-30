@@ -25,7 +25,9 @@
               <component
                 :is="activePanel.component"
                 v-bind="
-                  ['pluginMarket', 'languageModel', 'mediaModel', 'personalization', 'deviceLink'].includes(activePanel.id) ? { visible } : {}
+                  ['pluginMarket', 'languageModel', 'imageModel', 'mediaModel', 'personalization', 'deviceLink'].includes(activePanel.id)
+                    ? { visible, ...(activePanel.modelTypes ? { modelTypes: activePanel.modelTypes } : {}) }
+                    : {}
                 " />
             </keep-alive>
           </transition>
@@ -36,12 +38,13 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, shallowRef } from "vue";
+import { defineAsyncComponent, shallowRef, type Component } from "vue";
 import { hasDesktopUpdate } from "@/stores/desktopUpdate";
 import { isMobile } from "@/lib/platform";
 import {
   IconPalette,
   IconSettings,
+  IconPhoto,
   IconPhotoVideo,
   IconBuildingStore,
   IconInfoCircle,
@@ -53,7 +56,16 @@ import {
   IconDevices,
 } from "@tabler/icons-vue";
 
-const settingsPanels = [
+type SettingsPanel = {
+  id: string;
+  label: string;
+  icon: Component;
+  component: Component;
+  groupLabel?: string;
+  modelTypes?: ("image" | "video" | "audio")[];
+};
+
+const settingsPanels: SettingsPanel[] = [
   { id: "ui", label: "界面设置", icon: IconPalette, component: defineAsyncComponent(() => import("./panels/ui.vue")) },
   { id: "general", label: "常规配置", icon: IconSettings, component: defineAsyncComponent(() => import("./panels/general/index.vue")) },
   {
@@ -63,7 +75,20 @@ const settingsPanels = [
     groupLabel: "模型",
     component: defineAsyncComponent(() => import("./panels/languageModel/index.vue")),
   },
-  { id: "mediaModel", label: "媒体模型", icon: IconPhotoVideo, component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")) },
+  {
+    id: "imageModel",
+    label: "图片生成模型",
+    icon: IconPhoto,
+    modelTypes: ["image"],
+    component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")),
+  },
+  {
+    id: "mediaModel",
+    label: "媒体模型",
+    icon: IconPhotoVideo,
+    modelTypes: ["video", "audio"],
+    component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")),
+  },
   {
     id: "pluginMarket",
     label: "插件市场",
