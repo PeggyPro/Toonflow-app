@@ -167,7 +167,10 @@ const imageModels = ref<ImageModelDraft[]>([]);
 const fetchingImageModels = ref(false);
 const imageProviderForm = ref();
 const imageRules = {
-  id: [{ required: true, message: "请输入 Provider ID", trigger: "blur" }],
+  id: [
+    { required: true, message: "请输入 Provider ID", trigger: "blur" },
+    { pattern: /^[a-z][a-zA-Z0-9]*$/, message: "Provider ID 须以小写字母开头，只能包含字母和数字", trigger: "blur" },
+  ],
   label: [{ required: true, message: "请输入显示名称", trigger: "blur" }],
   apiUrl: [{ required: true, message: "请输入 API 地址", trigger: "blur" }],
 };
@@ -343,7 +346,9 @@ async function addProvider() {
     invalidateNodeModels("media");
     visible.value = false;
   } catch (error) {
-    const message = axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "添加失败，请重试";
+    const response = axios.isAxiosError(error) ? error.response?.data as { message?: string; data?: unknown } | undefined : undefined;
+    const details = Array.isArray(response?.data) ? response.data.map(item => typeof item === "string" ? item : item && typeof item === "object" && "message" in item ? String(item.message) : "").filter(Boolean).join("；") : "";
+    const message = response?.message ? `${response.message}${details ? `：${details}` : ""}` : error instanceof Error ? error.message : "添加失败，请重试";
     formError.value = addedProvider.value ? `供应商已添加，连接配置未保存：${message}。填写内容已保留，请重试。` : message;
   } finally {
     saving.value = false;
