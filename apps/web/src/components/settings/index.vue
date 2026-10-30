@@ -77,7 +77,7 @@ const settingsPanels: SettingsPanel[] = [
   },
   {
     id: "imageModel",
-    label: "图片生成模型",
+    label: "图片模型",
     icon: IconPhoto,
     modelTypes: ["image"],
     component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")),
@@ -86,7 +86,7 @@ const settingsPanels: SettingsPanel[] = [
     id: "mediaModel",
     label: "媒体模型",
     icon: IconPhotoVideo,
-    modelTypes: ["video", "audio"],
+    modelTypes: ["video"],
     component: defineAsyncComponent(() => import("./panels/mediaModel/index.vue")),
   },
   {

@@ -21,8 +21,9 @@
             <el-text size="small" type="info">{{ item.models.length }} 个模型</el-text>
           </div>
           <el-space class="itemActions" wrap>
-            <el-button v-if="isTfRouterProvider(item) && item.apiKey?.trim() && !item.models.length" text :icon="IconRefresh" :loading="fetchingId === item.id" :disabled="!!deletingId || !!fetchingId" @click="fetchProviderModels(item)">获取模型</el-button>
-            <el-button text :icon="IconEdit" :disabled="!!deletingId" @click="openCustomProvider(item)">编辑</el-button>
+            <el-button v-if="isTfRouterProvider(item) && item.apiKey?.trim() && !item.models.length" text :icon="IconRefresh" :loading="fetchingId === item.id" :disabled="!!deletingId || !!fetchingId || !!testingId" @click="fetchProviderModels(item)">获取模型</el-button>
+            <el-button text :icon="IconPlugConnected" :loading="testingId === item.id" :disabled="!!deletingId || !!fetchingId || !!testingId" @click="testProvider(item)">{{ testingId === item.id ? "测试中…" : "测试连接" }}</el-button>
+            <el-button text :icon="IconEdit" :disabled="!!deletingId || !!testingId" @click="openCustomProvider(item)">编辑</el-button>
             <el-popconfirm title="确定删除此供应商及其模型？" confirmButtonText="删除" cancelButtonText="取消" @confirm="deleteProvider(item.id)">
               <template #reference><el-button text type="danger" :icon="IconTrash" :loading="deletingId === item.id" :disabled="!!deletingId">删除</el-button></template>
             </el-popconfirm>
@@ -44,7 +45,7 @@ import { computed, defineAsyncComponent, ref, shallowRef, type Component } from 
 import axios from "axios";
 import { ElMessage } from "element-plus";
 import { customProviders, saveSettings, type CustomProvider, type CustomProviderModel } from "@/stores/settings";
-import { IconPlus, IconSettings, IconEdit, IconTrash, IconRefresh } from "@tabler/icons-vue";
+import { IconPlus, IconSettings, IconEdit, IconTrash, IconRefresh, IconPlugConnected } from "@tabler/icons-vue";
 import { languageProviders } from "@toonflow/providers";
 import logoUrl from "@toonflow/assets/logo.svg";
 import tfAccount from "../../tfAccount.vue";
@@ -58,6 +59,7 @@ const customProviderDialogVisible = ref(false);
 const editingProvider = ref<CustomProvider>();
 const deletingId = ref("");
 const fetchingId = ref("");
+const testingId = ref("");
 const sortedProviders = computed(() => [...customProviders.value].sort((a, b) => Number(isTfRouterProvider(b)) - Number(isTfRouterProvider(a))));
 
 function getProviderVersion(provider: CustomProvider) {
@@ -105,8 +107,24 @@ async function saveProviderApiKey(id: string, key: string) {
   });
 }
 
+async function testProvider(provider: CustomProvider) {
+  if (testingId.value || deletingId.value || fetchingId.value) return;
+  testingId.value = provider.id;
+  try {
+    const { data } = await axios.post("/api/providers/models", {
+      apiUrl: provider.apiUrl,
+      protocol: provider.protocol,
+      apiKey: provider.apiKey,
+    }, { timeout: 35000 });
+    if (data.code !== 200 || !Array.isArray(data.data) || !data.data.length) throw new Error(data.message || "未获取到可用模型");
+    ElMessage.success(`连接成功，已返回 ${data.data.length} 个模型`);
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || "连接失败，请检查供应商配置" : error instanceof Error ? error.message : "连接失败，请检查供应商配置");
+  } finally { testingId.value = ""; }
+}
+
 async function fetchProviderModels(provider: CustomProvider) {
-  if (fetchingId.value) return;
+  if (fetchingId.value || testingId.value) return;
   const { id, apiUrl, protocol, apiKey } = provider;
   fetchingId.value = id;
   try {

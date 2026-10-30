@@ -22,8 +22,9 @@
             <el-text size="small" type="info">{{ getVisibleModels(item).length }} 个模型</el-text>
           </div>
           <el-space class="itemActions" wrap>
-            <el-button v-if="item.modelsUrl" text :icon="IconDownload" :loading="fetchingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !!item.loadError || !item.revision" @click="fetchModels(item)">获取模型</el-button>
-            <el-button text :icon="IconEdit" :disabled="!!fetchingFile || !!deletingFile || !!item.loadError" @click="editProvider(item)">编辑模型</el-button>
+            <el-button v-if="item.modelsUrl" text :icon="IconDownload" :loading="fetchingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !!testingFile || !!item.loadError || !item.revision" @click="fetchModels(item)">获取模型</el-button>
+            <el-button text :icon="IconPlugConnected" :loading="testingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !!testingFile || !!item.loadError || !item.revision" @click="testProvider(item)">{{ testingFile === item.fileName ? "测试中…" : "测试连接" }}</el-button>
+            <el-button text :icon="IconEdit" :disabled="!!fetchingFile || !!deletingFile || !!testingFile || !!item.loadError" @click="editProvider(item)">编辑模型</el-button>
             <el-popconfirm title="确定删除此供应商及其模型？" confirmButtonText="删除" cancelButtonText="取消" @confirm="deleteProvider(item)">
               <template #reference><el-button text type="danger" :icon="IconTrash" :loading="deletingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !item.revision">删除</el-button></template>
             </el-popconfirm>
@@ -44,7 +45,7 @@
 import axios from "axios";
 import { computed, defineAsyncComponent, onMounted, onBeforeUnmount, ref, shallowRef, type Component } from "vue";
 import { ElMessage } from "element-plus";
-import { IconPlus, IconSettings, IconEdit, IconTrash, IconDownload } from "@tabler/icons-vue";
+import { IconPlus, IconSettings, IconEdit, IconTrash, IconDownload, IconPlugConnected } from "@tabler/icons-vue";
 import logoUrl from "@toonflow/assets/logo.svg";
 import type { MediaProvider, MediaProviderModel } from "./types";
 import { settings, saveSettings } from "@/stores/settings";
@@ -53,14 +54,16 @@ import tfAccount from "../../tfAccount.vue";
 
 type MediaModelType = Exclude<MediaProviderModel["type"], "text">;
 
-const { visible = true, modelTypes = ["video", "audio"] as MediaModelType[] } = defineProps<{
+const { visible = true, modelTypes = ["video"] as MediaModelType[] } = defineProps<{
   visible?: boolean;
   modelTypes?: MediaModelType[];
 }>();
 const mediaProviderDialog = shallowRef<Component>();
 const editProviderDialog = shallowRef<Component>();
 const providers = ref<MediaProvider[]>([]);
-const sortedProviders = computed(() => [...providers.value].sort((a, b) => Number(b.id.toLowerCase() === "tfrouter") - Number(a.id.toLowerCase() === "tfrouter")));
+const sortedProviders = computed(() => providers.value
+  .filter(provider => getVisibleModels(provider).length > 0 || !!provider.loadError)
+  .sort((a, b) => Number(b.id.toLowerCase() === "tfrouter") - Number(a.id.toLowerCase() === "tfrouter")));
 const providerScopeLabel = computed(() => modelTypes.length === 1 && modelTypes[0] === "image" ? "图片生成" : "媒体");
 const loaded = ref(false);
 const providerDialogVisible = ref(false);
@@ -69,6 +72,7 @@ const addMode = ref<"builtin" | "custom">("builtin");
 const editingProvider = ref<MediaProvider>();
 const deletingFile = ref("");
 const fetchingFile = ref("");
+const testingFile = ref("");
 let loadRequest = 0;
 
 function getVisibleModels(provider: MediaProvider) {
@@ -128,8 +132,25 @@ function editProvider(provider: MediaProvider) {
   editorVisible.value = true;
 }
 
+async function testProvider(provider: MediaProvider) {
+  if (fetchingFile.value || deletingFile.value || testingFile.value || provider.loadError || !provider.revision) return;
+  testingFile.value = provider.fileName;
+  try {
+    const { data } = await axios.post<{ code: number; data: { networkTested: boolean; modelCount: number }; message: string }>("/api/providers/media/test", {
+      fileName: provider.fileName,
+      revision: provider.revision,
+      ...(modelTypes.length === 1 ? { modelType: modelTypes[0] } : {}),
+    }, { timeout: 35000 });
+    if (data.code !== 200 || !data.data) throw new Error(data.message || "连接失败，请检查供应商配置");
+    if (data.data.networkTested) ElMessage.success(`连接成功，已返回 ${data.data.modelCount} 个模型`);
+    else ElMessage.success(`配置验证通过，当前有 ${data.data.modelCount} 个模型`);
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || "连接失败，请检查供应商配置" : error instanceof Error ? error.message : "连接失败，请检查供应商配置");
+  } finally { testingFile.value = ""; }
+}
+
 async function fetchModels(provider: MediaProvider) {
-  if (fetchingFile.value || deletingFile.value || !provider.modelsUrl || !provider.revision || provider.loadError) return;
+  if (fetchingFile.value || deletingFile.value || testingFile.value || !provider.modelsUrl || !provider.revision || provider.loadError) return;
   fetchingFile.value = provider.fileName;
   try {
     const { data } = await axios.post<{ code: number; data: MediaProvider; message: string }>("/api/providers/media/models", {
@@ -147,7 +168,7 @@ async function fetchModels(provider: MediaProvider) {
 }
 
 async function deleteProvider(provider: MediaProvider) {
-  if (fetchingFile.value || deletingFile.value || !provider.revision) return;
+  if (fetchingFile.value || deletingFile.value || testingFile.value || !provider.revision) return;
   deletingFile.value = provider.fileName;
   let deleted = false;
   try {

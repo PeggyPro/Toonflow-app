@@ -511,6 +511,27 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
   return saveMediaProvider(fileName, [...provider.models.filter(model => !types.has(model.type)), ...models], provider.revision, apiKey);
 }
 
+export async function testMediaProvider(fileName: string, revision: string, modelType?: Exclude<ModelType, "text">) {
+  if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
+  const provider = await getMediaProvider(fileName.slice(0, -3));
+  if (revision !== provider.revision) invalid("供应商文件已被修改，请刷新页面后再测试", 409);
+  const apiKey = getMediaProviderApiKey(provider.id);
+  if (provider.rules?.some(rule => rule.field === "apiKey") && !apiKey) invalid("请填写 API Key");
+  if (!provider.modelsUrl) {
+    return { networkTested: false, modelCount: provider.models.filter(model => modelType ? model.type === modelType : true).length };
+  }
+  const modelsUrl = new URL(provider.modelsUrl);
+  if (modelType) modelsUrl.searchParams.set("type", modelType);
+  const response = await fetch(modelsUrl, {
+    headers: { Accept: "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+    signal: AbortSignal.timeout(30000), redirect: "error",
+  });
+  if (!response.ok) throw new Error(t`测试媒体供应商失败（HTTP ${response.status}）`);
+  const result = z.object({ data: z.array(z.unknown()) }).safeParse(await response.json());
+  if (!result.success || !result.data.data.length) throw new Error("媒体供应商未返回可用模型");
+  return { networkTested: true, modelCount: result.data.data.length };
+}
+
 export async function deleteMediaProvider(fileName: string, revision: string) {
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
   const path = await directory();
