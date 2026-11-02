@@ -50,9 +50,15 @@ export async function createApp({
     const { default: initializeExt } = await import("@/utils/plugins/initializeExt");
     await initializeExt(resolve(dataDirectory, "ext"), extRoot, pluginRevision);
   }
-  // ACT: 内置媒体供应商随构建同步，其他供应商文件和独立保存的配置保留。
   if (dataDirectory && providersRoot) {
     const sourceDirectory = resolve(providersRoot, "media");
+    const targetDirectory = resolve(dataDirectory, "providers");
+    const installed = await readdir(targetDirectory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    // ACT: 仅首次创建目录时预装；之后只同步仍存在的内置文件，旧版删除或重装清理初始化标记也不补回缺失项。
+    const providers = installed === null ? autoInstallProviders : autoInstallProviders.filter(name => installed.includes(name));
     let providerRevision = pluginRevision;
     if (providerRevision === undefined) {
       const hash = createHash("sha256");
@@ -65,7 +71,7 @@ export async function createApp({
       }
       providerRevision = hash.digest("hex");
     }
-    await initializePlugins(resolve(dataDirectory, "providers"), sourceDirectory, autoInstallProviders, providerRevision);
+    await initializePlugins(targetDirectory, sourceDirectory, providers, providerRevision);
   }
   // ACT: 技能和团队只补首次安装，保留用户修改。
   if (dataDirectory && skillsRoot) await initializePlugins(resolve(dataDirectory, "skills"), skillsRoot);
