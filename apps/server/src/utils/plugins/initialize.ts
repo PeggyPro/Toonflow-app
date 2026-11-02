@@ -20,11 +20,13 @@ export default async function initializePlugins(targetDirectory: string, sourceD
     if (error.code === "ENOENT") return [];
     throw error;
   });
+  // ACT: 主动删除的内置文件不再自动补齐，构建更新或重装也保留删除记录。
+  const pendingFiles = files.filter(file => !installed.some(item => item.name === `${file.name}.removed`));
   if (initialized !== null && (revision === undefined || initialized === revision)
-    && files.every(file => installed.some(item => item.name === file.name))) return;
+    && pendingFiles.every(file => installed.some(item => item.name === file.name))) return;
 
   await mkdir(targetDirectory, { recursive: true });
-  for (const file of files) {
+  for (const file of pendingFiles) {
     const source = resolve(sourceDirectory, file.name);
     const target = resolve(targetDirectory, file.name);
     if (revision === undefined) {

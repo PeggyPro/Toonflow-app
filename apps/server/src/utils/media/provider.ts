@@ -1,7 +1,7 @@
 import { t, translateMessage, validationOptions } from "@/lib/i18n";
 
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, unlink } from "@toonflow/file";
+import { lstat, mkdir, readFile, readdir, unlink, writeFile } from "@toonflow/file";
 import { dirname, join } from "node:path";
 import { createContext, SourceTextModule } from "node:vm";
 import type { AudioConvertOptions, Provider, ProviderTools } from "@toonflow/providers";
@@ -426,8 +426,10 @@ export async function addMediaProvider(source: string) {
   const { fileName } = result;
   const path = join((await directory(true))!, fileName);
   const release = lockWorkspaceFiles([path]);
-  try { await writeWorkspaceFile(path, source, true); }
-  catch (error) {
+  try {
+    await writeWorkspaceFile(path, source, true);
+    await unlink(`${path}.removed`).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; });
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") invalid(t`媒体供应商“${result.label}”已安装，请在「设置 → 媒体模型」中编辑，或先删除后重新安装。`, 409);
     throw error;
   }
@@ -541,7 +543,16 @@ export async function deleteMediaProvider(fileName: string, revision: string) {
   try {
     const current = await readProvider(path, fileName);
     if (current.revision !== revision) invalid("供应商文件已被修改，请刷新页面后再删除", 409);
-    await unlink(file);
+    const removedPath = `${file}.removed`;
+    let recorded = false;
+    await writeFile(removedPath, "", { flag: "wx" }).then(() => { recorded = true; }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+    try { await unlink(file); }
+    catch (error) {
+      if (recorded) await unlink(removedPath);
+      throw error;
+    }
     conf.delete(`settings.mediaProviderConfigs.${current.id}`);
   } finally { release(); }
 }
